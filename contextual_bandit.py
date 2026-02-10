@@ -19,10 +19,19 @@ class ContextualBandit:
         Radius of the ball from which contexts are sampled uniformly (default: 1.0)
     random_seed : int, optional
         Random seed for reproducibility
-    data_num_steps : int, optional
+    online_distribution : str, optional
+        Distribution of contexts for online pulls (default: "uniform")
+    discrete_contexts : int, optional
+        If > 0, contexts are sampled as discrete integers in [0, discrete_contexts)
+        (default: 0, meaning continuous contexts)
+
+    ### For data generation and historical data handling:
+    offline_data : int, optional
         Number of steps to generate for offline data. If None, no data is generated.
-    data_distribution : str, optional
-        Distribution of arms for data generation (default: "uniform")
+    offline_arm_distribution : str, optional
+        Distribution of arms for offline data generation (default: "uniform")
+    offline_distribution : str, optional
+        Distribution of contexts for offline data generation (default: "uniform")
     """
     
     def __init__(
@@ -32,14 +41,22 @@ class ContextualBandit:
         reward_function: Callable[[np.ndarray, int], float],
         context_radius: float = 1.0,
         random_seed: Optional[int] = None,
-        data_num_steps: Optional[int] = None,
-        data_distribution: str = "uniform"
+        online_distribution: str = "uniform",
+        discrete_contexts: int = 0,
+        offline_data: Optional[int] = None,
+        offline_arm_distribution: str = "uniform",
+        offline_distribution: str = "uniform",
     ):
         self.d = d
         self.K = K
         self.reward_function = reward_function
         self.context_radius = context_radius
-        
+        self.online_distribution = online_distribution
+        self.discrete_contexts = discrete_contexts
+        self.offline_data = offline_data
+        self.offline_arm_distribution = offline_arm_distribution
+        self.offline_distribution = offline_distribution
+
         if random_seed is not None:
             np.random.seed(random_seed)
         
@@ -57,26 +74,68 @@ class ContextualBandit:
         self.data_pointers = np.zeros(self.K, dtype=int)
         
         # Generate initial data if specified
-        if data_num_steps is not None:
-            self.generate_data(num_steps=data_num_steps, distribution=data_distribution)
+        if offline_data is not None:
+            self.generate_data(num_steps=offline_data, arm_distribution=offline_arm_distribution, context_distribution=offline_distribution)
     
-    def sample_context(self) -> np.ndarray:
+    def sample_context(self, distribution) -> np.ndarray:
         """
-        Sample a context uniformly from a d-dimensional ball of given radius.
+        Sample a context uniformly from a d-dimensional ball of given radius, or from a discrete set of integers [0, discrete_contexts).
         
         Returns
         -------
         np.ndarray
-            A d-dimensional context vector sampled uniformly from the ball
+            A d-dimensional context vector sampled uniformly from the ball, or a discrete context vector if discrete_contexts > 0
         """
-        # https://stackoverflow.com/questions/54544971/how-to-generate-uniform-random-points-inside-d-dimension-ball-sphere#:~:text=The%20best%20way%20to%20generate,that%20radius%20in%20d%20dimensions.
 
-        z = np.random.randn(self.d)
-        z = z / np.linalg.norm(z)  # Normalize to unit sphere
-        r = self.context_radius * np.random.uniform(0, 1) ** (1.0 / self.d)
-        
-        context = r * z
-        context = np.insert(context, 0, 1.0)  # Add intercept term
+        if self.discrete_contexts > 0:
+            if distribution == "uniform":
+                context = np.random.randint(0, self.discrete_contexts, size=self.d)
+                context = context / self.discrete_contexts  # Normalize to [0, 1]
+                context = np.insert(context, 0, 1.0)  # Add intercept term
+
+            elif distribution == "biased-small":
+                # Biased distribution: higher probability for smaller integers
+                probabilities = np.linspace(1, 0.1, self.discrete_contexts)
+                probabilities /= probabilities.sum()  # Normalize to sum to 1
+                context = np.random.choice(self.discrete_contexts, size=self.d, p=probabilities)
+                context = context / self.discrete_contexts  # Normalize to [0, 1]
+                context = np.insert(context, 0, 1.0)  # Add intercept term
+
+            elif distribution == "biased-large":
+                # Biased distribution: higher probability for larger integers
+                probabilities = np.linspace(0.1, 1, self.discrete_contexts)
+                probabilities /= probabilities.sum()  # Normalize to sum to 1
+                context = np.random.choice(self.discrete_contexts, size=self.d, p=probabilities)
+                context = context / self.discrete_contexts  # Normalize to [0, 1]
+                context = np.insert(context, 0, 1.0)  # Add intercept term
+
+        # Continuous contexts
+        # https://stackoverflow.com/questions/54544971/how-to-generate-uniform-random-points-inside-d-dimension-ball-sphere#:~:text=The%20best%20way%20to%20generate,that%20radius%20in%20d%20dimensions.
+        else:
+            if distribution == "uniform":
+                z = np.random.randn(self.d)
+                z = z / np.linalg.norm(z)  # Normalize to unit sphere
+                r = self.context_radius * np.random.uniform(0, 1) ** (1.0 / self.d)
+                
+            elif distribution == "biased-small":
+                # Biased distribution: higher probability for smaller values in continuous space
+                # For simplicity, we can bias the radius r to be smaller values more likely
+                z = np.random.randn(self.d)
+                z = z / np.linalg.norm(z)  # Normalize to unit sphere
+                probabilities = np.linspace(1, 0.1, 1000)
+                probabilities /= probabilities.sum()
+                r = self.context_radius * np.random.choice(np.linspace(0, 1, 1000), p=probabilities)
+                
+            elif distribution == "biased-large":
+                # Biased distribution: higher probability for larger values in continuous space
+                z = np.random.randn(self.d)
+                z = z / np.linalg.norm(z)  # Normalize to unit sphere
+                probabilities = np.linspace(0.1, 1, 1000)
+                probabilities /= probabilities.sum()
+                r = self.context_radius * np.random.choice(np.linspace(0, 1, 1000), p=probabilities)
+            context = r * z
+            context = np.insert(context, 0, 1.0)  # Add intercept term
+                
         return context
     
     def get_reward(self, context: np.ndarray, arm: int) -> float:
@@ -119,7 +178,7 @@ class ContextualBandit:
             The context used and the reward observed
         """
         if context is None:
-            context = self.sample_context()
+            context = self.sample_context(distribution=self.online_distribution)
         
         reward = self.get_reward(context, arm)
         
@@ -150,7 +209,7 @@ class ContextualBandit:
         np.ndarray
             Array of shape (K,) containing rewards for each arm
         """
-        rewards = np.array([self.get_reward(context, arm) for arm in range(self.K)])
+        rewards = np.array([self.reward_function(context, arm) for arm in range(self.K)])
         return rewards
     
     def get_optimal_arm(self, context: np.ndarray) -> int:
@@ -192,42 +251,42 @@ class ContextualBandit:
             context = self.contexts_history[-1]
         
         optimal_arm = self.get_optimal_arm(context)
-        optimal_reward = self.get_reward(context, optimal_arm)
-        chosen_reward = self.get_reward(context, chosen_arm)
+        optimal_reward = self.reward_function(context, optimal_arm)
+        chosen_reward = self.reward_function(context, chosen_arm)
         
         regret = optimal_reward - chosen_reward
         return regret
     
     def reset_history(self):
-        """Reset the bandit's history."""
+        """Reset the bandit's history while keeping the same generated data."""
         self.contexts_history = []
         self.arms_history = []
         self.rewards_history = []
         self.t = 0
 
-    def generate_data(self, num_steps: int = None, distribution: str = "uniform"):
+    def generate_data(self, num_steps: int = None, arm_distribution: str = "uniform", context_distribution: str = "uniform") -> None:
         """
         Generate data by pulling arms according to a specified distribution.
         
         Parameters
         ----------
         num_steps : int
-        distribution : str, optional
-            Distribution of arms to pull. Options:
-            - "uniform": all arms pulled equally (default)
-            - "lightly_unbalanced": some arms pulled more, but all covered
-            - "half_coverage": only half the arms are pulled
+        arm_distribution : str, optional
+            Distribution of arms for data generation (default: "uniform")
+        context_distribution : str, optional
+            Distribution of contexts for data generation (default: "uniform")
         """
+
         if num_steps is None:
             num_steps = self.K * 10  # Default to 10 pulls per arm                
-        
+
         # Generate arm sequence based on distribution
-        if distribution == "uniform":
+        if arm_distribution == "uniform":
             # All arms pulled equally
             arms = np.tile(np.arange(self.K), num_steps // self.K + 1)[:num_steps]
             np.random.shuffle(arms)
             
-        elif distribution == "lightly_unbalanced":
+        elif arm_distribution == "lightly_unbalanced":
             # Some arms pulled more, but all covered
             arm_counts = np.ones(self.K, dtype=int)
             remaining = num_steps - self.K
@@ -238,17 +297,17 @@ class ContextualBandit:
             arms = np.repeat(np.arange(self.K), arm_counts)[:num_steps]
             np.random.shuffle(arms)
             
-        elif distribution == "half_coverage":
+        elif arm_distribution == "half_coverage":
             # Only half the arms are pulled
             covered_arms = np.random.choice(self.K, size=self.K // 2, replace=False)
             arms = np.random.choice(covered_arms, size=num_steps)
             
         else:
-            raise ValueError(f"Invalid distribution: {distribution}")
+            raise ValueError(f"Invalid arm distribution: {arm_distribution}")
         
         # Pull arms according to the generated sequence
         for arm in arms:
-            context = self.sample_context()
+            context = self.sample_context(distribution=context_distribution)
             self.pull_arm(arm, context, data=True)
 
     def sample_data(self, arm: int) -> Tuple[np.ndarray, float, int]:
@@ -281,7 +340,6 @@ class ContextualBandit:
         
         return context, reward
 
-    
     def get_history(self) -> Tuple[list, list, list]:
         """
         Get the bandit's history.
@@ -292,3 +350,14 @@ class ContextualBandit:
             Lists of contexts, arms pulled, and rewards observed
         """
         return self.contexts_history, self.arms_history, self.rewards_history
+    
+    def get_data(self) -> Tuple[list, list, list]:
+        """
+        Get the bandit's generated data.
+        
+        Returns
+        -------
+        Tuple[list, list, list]
+            Lists of contexts, arms pulled, and rewards observed in the generated data
+        """
+        return self.contexts_data, self.arms_data, self.rewards_data
