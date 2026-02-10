@@ -273,27 +273,27 @@ if __name__ == "__main__":
             )
             plt.close(fig)
 
-        regret_artificial_replay = linucb(
+        regret_artificial_replay, artificial_pulls = linucb(
             bandit_with_data, alpha, trials, history="artificial replay"
         )
         cum_regret_artificial = np.cumsum(regret_artificial_replay)
 
         bandit_with_data.reset_history()  # Clear history
 
-        regret_artificial_replay_match_context = linucb_matching_context(
+        regret_artificial_replay_match_context, artificial_pulls_match_context = linucb_matching_context(
             bandit_with_data, alpha, trials
         )
         cum_regret_artificial_match_context = np.cumsum(regret_artificial_replay_match_context)
 
         bandit_with_data.reset_history()  # Clear history
 
-        regret_full_start = linucb(
+        regret_full_start, _ = linucb(
             bandit_with_data, alpha, trials, history="full start"
         )
         cum_regret_full_start = np.cumsum(regret_full_start)
 
         # plot results
-        fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+        fig, axes = plt.subplots(3, 1, figsize=(12, 10))
         fig.suptitle(
             f"Reward Function {rew_fn_id}: {reward_fn_titles[rew_fn_id]}",
             fontsize=12,
@@ -373,6 +373,32 @@ if __name__ == "__main__":
         axes[1].set_title("Cumulative Regret", fontsize=13)
         axes[1].legend(fontsize=11)
         axes[1].grid(True, alpha=0.3)
+
+        axes[2].bar(
+            np.arange(K) - 0.1,
+            artificial_pulls,
+            width=0.1,
+            alpha=0.85,
+            label="Artificial Replay",
+        )
+        axes[2].bar(
+            np.arange(K),
+            artificial_pulls_match_context,
+            width=0.1,
+            alpha=0.85,
+            label="Artificial Replay Match Context",
+        )
+        axes[2].bar(
+            np.arange(K) + 0.1,
+            np.bincount(arms, minlength=K),
+            width=0.1,
+            alpha=0.85,
+            label="Offline Data",
+        )
+        axes[2].set_xlabel("Arm", fontsize=12)
+        axes[2].set_ylabel("Number of Pulls in Artificial Replay", fontsize=12)
+        axes[2].legend(fontsize=11)
+        axes[2].set_title("Arm Pull Distribution in Artificial Replay", fontsize=13)
 
         plt.tight_layout()
         output_path = (

@@ -115,7 +115,7 @@ def linucb(bandit, alpha, trials, history = None):
             b[idx] += r * x
             regret[t] = bandit.compute_regret(idx, context=x)
     
-    return regret
+    return regret, artificial_pulls if history == "artificial replay" else None
 
 def linucb_matching_context(bandit, alpha, trials):
     """
@@ -152,6 +152,7 @@ def linucb_matching_context(bandit, alpha, trials):
     rewards_data = np.array(rewards_data)
 
     t = 0
+    artificial_pulls = np.zeros(K, dtype=int)
     x = bandit.sample_context(bandit.online_distribution)
 
     while t < trials:
@@ -165,6 +166,7 @@ def linucb_matching_context(bandit, alpha, trials):
             A[idx] += np.outer(x, x)
             b[idx] += r * x
             df = df.drop(matches.index[0])  # Remove the used data point
+            artificial_pulls[idx] += 1
             continue
         else:
             _, r = bandit.pull_arm(idx, x)
@@ -173,7 +175,5 @@ def linucb_matching_context(bandit, alpha, trials):
             regret[t] = bandit.compute_regret(idx, context=x)
             t += 1
             x = bandit.sample_context(bandit.online_distribution)
-    
-    # print(df)
 
-    return regret
+    return regret, artificial_pulls
