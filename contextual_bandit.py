@@ -21,6 +21,8 @@ class ContextualBandit:
         Random seed for reproducibility
     online_distribution : str, optional
         Distribution of contexts for online pulls (default: "uniform")
+    online_data : int, optional
+        Number of steps to generate online contexts. If None, no data is generated (generated live). Must be >= number of trials.
     discrete_contexts : int, optional
         If > 0, contexts are sampled as discrete integers in [0, discrete_contexts)
         (default: 0, meaning continuous contexts)
@@ -42,6 +44,7 @@ class ContextualBandit:
         context_radius: float = 1.0,
         random_seed: Optional[int] = None,
         online_distribution: str = "uniform",
+        online_data: Optional[int] = None,
         discrete_contexts: int = 0,
         offline_data: Optional[int] = None,
         offline_arm_distribution: str = "uniform",
@@ -52,6 +55,7 @@ class ContextualBandit:
         self.reward_function = reward_function
         self.context_radius = context_radius
         self.online_distribution = online_distribution
+        self.online_data = online_data
         self.discrete_contexts = discrete_contexts
         self.offline_data = offline_data
         self.offline_arm_distribution = offline_arm_distribution
@@ -61,22 +65,25 @@ class ContextualBandit:
             np.random.seed(random_seed)
         
         # History tracking (for live interactions)
-        self.contexts_history = []
-        self.arms_history = []
-        self.rewards_history = []
+        self.online_contexts = []
+        self.online_arms = []
+        self.online_rewards = []
         self.t = 0
         
         # Data tracking (for offline data collection)
-        self.contexts_data = []
-        self.arms_data = []
-        self.rewards_data = []
-        self.data_size = 0
-        self.data_pointers = np.zeros(self.K, dtype=int)
+        self.offline_contexts = []
+        self.offline_arms = []
+        self.offline_rewards = []
+        self.offline_data_size = 0
+        self.offline_data_pointers = np.zeros(self.K, dtype=int)
         
-        # Generate initial data if specified
+        # Generate initial offline / online data if specified
         if offline_data is not None:
             self.generate_data(num_steps=offline_data, arm_distribution=offline_arm_distribution, context_distribution=offline_distribution)
-    
+        
+        if online_data is not None:
+            self.online_contexts = [self.sample_context(distribution=online_distribution) for _ in range(online_data)]
+
     def sample_context(self, distribution) -> np.ndarray:
         """
         Sample a context uniformly from a d-dimensional ball of given radius, or from a discrete set of integers [0, discrete_contexts).
@@ -88,6 +95,12 @@ class ContextualBandit:
         """
 
         if self.discrete_contexts > 0:
+
+            p_large = np.linspace(0.1, 1, self.discrete_contexts)
+            p_small = np.linspace(1, 0.1, self.discrete_contexts)
+            p_large /= p_large.sum()
+            p_small /= p_small.sum()
+
             if distribution == "uniform":
                 context = np.random.randint(0, self.discrete_contexts, size=self.d)
                 context = context / self.discrete_contexts  # Normalize to [0, 1]
@@ -95,17 +108,29 @@ class ContextualBandit:
 
             elif distribution == "biased-small":
                 # Biased distribution: higher probability for smaller integers
-                probabilities = np.linspace(1, 0.1, self.discrete_contexts)
-                probabilities /= probabilities.sum()  # Normalize to sum to 1
+                probabilities = p_small
                 context = np.random.choice(self.discrete_contexts, size=self.d, p=probabilities)
                 context = context / self.discrete_contexts  # Normalize to [0, 1]
                 context = np.insert(context, 0, 1.0)  # Add intercept term
 
             elif distribution == "biased-large":
                 # Biased distribution: higher probability for larger integers
-                probabilities = np.linspace(0.1, 1, self.discrete_contexts)
-                probabilities /= probabilities.sum()  # Normalize to sum to 1
+                probabilities = p_large
                 context = np.random.choice(self.discrete_contexts, size=self.d, p=probabilities)
+                context = context / self.discrete_contexts  # Normalize to [0, 1]
+                context = np.insert(context, 0, 1.0)  # Add intercept term
+            
+            elif distribution == "small-large":
+                x = np.random.choice(self.discrete_contexts, size=1, p=p_small)
+                y = np.random.choice(self.discrete_contexts, size=1, p=p_large)
+                context = np.array([x[0], y[0]])
+                context = context / self.discrete_contexts  # Normalize to [0, 1]
+                context = np.insert(context, 0, 1.0)  # Add intercept term
+
+            elif distribution == "large-small":
+                x = np.random.choice(self.discrete_contexts, size=1, p=p_small)
+                y = np.random.choice(self.discrete_contexts, size=1, p=p_large)
+                context = np.array([y[0], x[0]])
                 context = context / self.discrete_contexts  # Normalize to [0, 1]
                 context = np.insert(context, 0, 1.0)  # Add intercept term
 
@@ -138,6 +163,13 @@ class ContextualBandit:
                 
         return context
     
+    def get_online_sample(self) -> np.ndarray:
+        """
+        Get the next context for online interaction. If online_data was specified, return the pre-generated contexts in order; otherwise, sample a new context.
+        """
+
+        return self.online_contexts[self.t] if self.t < len(self.online_contexts) else self.sample_context(distribution=self.online_distribution)
+
     def get_reward(self, context: np.ndarray, arm: int) -> float:
         """
         Get the reward for pulling a specific arm given a context.
@@ -183,14 +215,14 @@ class ContextualBandit:
         reward = self.get_reward(context, arm)
         
         if data:
-            self.contexts_data.append(context)
-            self.arms_data.append(arm)
-            self.rewards_data.append(reward)
-            self.data_size += 1
+            self.offline_contexts.append(context)
+            self.offline_arms.append(arm)
+            self.offline_rewards.append(reward)
+            self.offline_data_size += 1
         else:
-            self.contexts_history.append(context)
-            self.arms_history.append(arm)
-            self.rewards_history.append(reward)
+            self.online_contexts.append(context)
+            self.online_arms.append(arm)
+            self.online_rewards.append(reward)
             self.t += 1
         
         return context, reward
@@ -247,8 +279,8 @@ class ContextualBandit:
         """
         if context is None:
             if self.t == 0:
-                raise ValueError("No context available in history.")
-            context = self.contexts_history[-1]
+                raise ValueError("No context available in online history.")
+            context = self.online_contexts[-1]
         
         optimal_arm = self.get_optimal_arm(context)
         optimal_reward = self.reward_function(context, optimal_arm)
@@ -257,11 +289,10 @@ class ContextualBandit:
         regret = optimal_reward - chosen_reward
         return regret
     
-    def reset_history(self):
-        """Reset the bandit's history while keeping the same generated data."""
-        self.contexts_history = []
-        self.arms_history = []
-        self.rewards_history = []
+    def reset_online_history(self):
+        """Reset the bandit's online pulls while keeping the same offline data & contexts."""
+        self.online_arms = []
+        self.online_rewards = []
         self.t = 0
 
     def generate_data(self, num_steps: int = None, arm_distribution: str = "uniform", context_distribution: str = "uniform") -> None:
@@ -325,18 +356,18 @@ class ContextualBandit:
         Tuple[np.ndarray, float, int]
             A tuple of (context, reward, index in data)
         """
-        indices = [i for i, a in enumerate(self.arms_data) if a == arm]
+        indices = [i for i, a in enumerate(self.offline_arms) if a == arm]
         if not indices:
-            raise ValueError(f"No data available for arm {arm}")
+            raise ValueError(f"No offline data available for arm {arm}")
         
-        pointer = self.data_pointers[arm]
+        pointer = self.offline_data_pointers[arm]
         if pointer >= len(indices):
             raise ValueError(f"No more samples left for arm {arm}")
         
         idx = indices[pointer]
-        self.data_pointers[arm] += 1
-        context = self.contexts_data[idx]
-        reward = self.rewards_data[idx]
+        self.offline_data_pointers[arm] += 1
+        context = self.offline_contexts[idx]
+        reward = self.offline_rewards[idx]
         
         return context, reward
 
@@ -351,13 +382,13 @@ class ContextualBandit:
         """
         return self.contexts_history, self.arms_history, self.rewards_history
     
-    def get_data(self) -> Tuple[list, list, list]:
+    def get_offline_data(self) -> Tuple[list, list, list]:
         """
-        Get the bandit's generated data.
+        Get the bandit's offline generated data.
         
         Returns
         -------
         Tuple[list, list, list]
             Lists of contexts, arms pulled, and rewards observed in the generated data
         """
-        return self.contexts_data, self.arms_data, self.rewards_data
+        return self.offline_contexts, self.offline_arms, self.offline_rewards

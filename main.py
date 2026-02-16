@@ -4,6 +4,7 @@ from contextual_bandit import ContextualBandit
 from linucb import linucb
 from linucb import linucb_matching_context
 import itertools
+import os
 
 def _sample_uniform_ball(d):
     """
@@ -25,7 +26,7 @@ def _sample_uniform_ball(d):
     return np.abs(r * z)
 
 
-def create_bandit(reward_fn_id, d=5, K=3, context_radius=1.0, random_seed=None, online_distribution="uniform", discrete_contexts=0, offline_data=None, offline_arm_distribution="uniform", offline_distribution="uniform"):
+def create_bandit(reward_fn_id, d=5, K=3, context_radius=1.0, random_seed=None, online_distribution="uniform", online_data=None, discrete_contexts=0, offline_data=None, offline_arm_distribution="uniform", offline_distribution="uniform"):
     """
     Create a contextual bandit with a specified reward function.
     
@@ -43,6 +44,8 @@ def create_bandit(reward_fn_id, d=5, K=3, context_radius=1.0, random_seed=None, 
         Random seed for reproducibility
     online_distribution : str
         Distribution for sampling contexts online ("uniform" or "biased")
+    online_data : int
+        Number of online contexts to generate in advance (if any)
     discrete_contexts : int
         If > 0, number of discrete contexts to use (instead of continuous sampling)
     offline_data : int
@@ -94,11 +97,12 @@ def create_bandit(reward_fn_id, d=5, K=3, context_radius=1.0, random_seed=None, 
     elif reward_fn_id == 4:
         # Reward function 4: r = 10(x^T a)
         # Sample arm parameters uniformly from unit ball
-        arm_params = np.array([_sample_uniform_ball(d+1) for _ in range(K)])
+        # arm_params = np.array([_sample_uniform_ball(d+1) for _ in range(K)])
+        arm_params = np.random.random((K, d+1))
         
         def reward_function_4(context, arm):
             a = arm_params[arm]
-            return 2 * np.dot(context, a)
+            return 5 * np.dot(context, a)
         
         reward_fn = reward_function_4
         
@@ -113,6 +117,7 @@ def create_bandit(reward_fn_id, d=5, K=3, context_radius=1.0, random_seed=None, 
         context_radius=context_radius,
         random_seed=random_seed,
         online_distribution=online_distribution,
+        online_data=online_data,
         discrete_contexts=discrete_contexts,
         offline_data=offline_data,
         offline_arm_distribution=offline_arm_distribution,
@@ -162,11 +167,11 @@ if __name__ == "__main__":
     test_dims = [2]
     test_arms = [5]
     test_rew_fn_id = [4]
-    test_online_distribution = ["uniform", "biased-small", "biased-large"]
-    test_discrete_contexts = [3, 5]
+    test_online_distribution = ["uniform", "small-large", "large-small"]
+    test_discrete_contexts = [3,5]
     
     test_N = [250]
-    test_offline_distribution = ["uniform", "biased-small", "biased-large"]
+    test_offline_distribution = ["uniform", "small-large", "large-small"]
     test_offline_arm_distribution = ["lightly_unbalanced"]
 
     test_cases = list(itertools.product(
@@ -190,8 +195,8 @@ if __name__ == "__main__":
         4: r"$r = 10(x^T a)$",
     }
 
-    alpha = 1.2
-    trials = 2500
+    alpha = 7.0
+    trials = 5000
     
     random_seed = 42
     np.random.seed(random_seed)
@@ -211,21 +216,27 @@ if __name__ == "__main__":
             K=K,
             # random_seed=42,
             online_distribution=online_dist,
+            online_data=trials,  # Generate online contexts in advance for consistency across runs
             discrete_contexts=discrete_ctx,
             offline_data=N,
             offline_arm_distribution=offline_arm_dist,
             offline_distribution=offline_dist
         )
 
-        print(f"Generated {bandit_with_data.data_size} offline data samples")
-        print(f"Arm distribution: {np.bincount(bandit_with_data.arms_data, minlength=K)}\n")
+        print(f"Generated {bandit_with_data.offline_data_size} offline data samples")
+        print(f"Arm distribution: {np.bincount(bandit_with_data.offline_arms, minlength=K)}\n")
+
+        print(f"Generated {len(bandit_with_data.online_contexts)} online contexts")
         
-        contexts, arms, rewards = bandit_with_data.get_data()
+        contexts, arms, rewards = bandit_with_data.get_offline_data()
         contexts = np.array(contexts)
         arms = np.array(arms)
         rewards = np.array(rewards)
         
         # Generate plots to visualize distribution of offline data for contexts (dim = 2 only), arms, and rewards
+
+        os.makedirs("experimentation results/offline_data_distribution", exist_ok=True)
+
         if d == 2:
             fig, ax = plt.subplots(3, 1, figsize=(18, 15))
             fig.suptitle(f"Offline Data Distribution: d={d}, K={K}, N={N}, Offline Distribution={offline_dist}", fontsize=14)
@@ -264,7 +275,7 @@ if __name__ == "__main__":
             ax[2].grid(True, alpha=0.3)
             plt.tight_layout()
             output_path = (
-                "experimentation results/offline_data_distribution/"
+                f"experimentation results/offline_data_distribution/"
                 f"d{d}_K{K}_N{N}_offline-{offline_dist}-discrete{discrete_ctx}.png"
             )
             plt.savefig(
@@ -278,14 +289,14 @@ if __name__ == "__main__":
         )
         cum_regret_artificial = np.cumsum(regret_artificial_replay)
 
-        bandit_with_data.reset_history()  # Clear history
+        bandit_with_data.reset_online_history()  # Clear history
 
         regret_artificial_replay_match_context, artificial_pulls_match_context = linucb_matching_context(
             bandit_with_data, alpha, trials
         )
         cum_regret_artificial_match_context = np.cumsum(regret_artificial_replay_match_context)
 
-        bandit_with_data.reset_history()  # Clear history
+        bandit_with_data.reset_online_history()  # Clear history
 
         regret_full_start, _ = linucb(
             bandit_with_data, alpha, trials, history="full start"
@@ -395,15 +406,31 @@ if __name__ == "__main__":
             alpha=0.85,
             label="Offline Data",
         )
+        
+
+        # for i, arm_param in enumerate(arm_params):
+        #     if rew_fn_id == 4:
+        #         axes[2].text(
+        #             i,
+        #             max(artificial_pulls[i], artificial_pulls_match_context[i], np.bincount(arms, minlength=K)[i]) + 0.5,
+        #             f"{arm_param[1]:.2f}, {arm_param[2]:.2f}",
+        #             ha="center",
+        #             fontsize=9,
+        #         )
         axes[2].set_xlabel("Arm", fontsize=12)
         axes[2].set_ylabel("Number of Pulls in Artificial Replay", fontsize=12)
         axes[2].legend(fontsize=11)
         axes[2].set_title("Arm Pull Distribution in Artificial Replay", fontsize=13)
 
         plt.tight_layout()
+
+        # create output directory if it doesn't exist
+        os.makedirs(f"experimentation results/{discrete_ctx}-contexts", exist_ok=True)
+
         output_path = (
-            "experimentation results/"
-            f"linucb_d{d}_K{K}_N{N}_offline-{offline_dist}-discrete{discrete_ctx}_online-{online_dist}_rew{rew_fn_id}.png"
+            f"experimentation results/{discrete_ctx}-contexts/"
+            f"linucb-offline-{offline_dist}_online-{online_dist}.png"
+            # f"linucb_d{d}_K{K}_N{N}_offline-{offline_dist}-discrete{discrete_ctx}_online-{online_dist}_rew{rew_fn_id}.png"
         )
         # output_path = (
         #     "experimentation results/exact_match_artificial/"

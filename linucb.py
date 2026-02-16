@@ -2,7 +2,6 @@ import numpy as np
 from contextual_bandit import ContextualBandit
 import pandas as pd
 
-
 def compute_ucb(x, A, b, alpha):
     """
     Compute Upper Confidence Bound for each arm.
@@ -58,7 +57,7 @@ def linucb(bandit, alpha, trials, history = None):
     regret = np.zeros(trials)
 
     if history == "full start":
-        context_data, arms_data, rewards_data = bandit.get_data()
+        context_data, arms_data, rewards_data = bandit.get_offline_data()
         for t in range(len(context_data)):
             x = context_data[t]
             a = arms_data[t]
@@ -67,7 +66,7 @@ def linucb(bandit, alpha, trials, history = None):
             b[a] += r * x
         
         for t in range(trials):
-            x = bandit.sample_context(bandit.online_distribution)
+            x = bandit.get_online_sample()
             UCB = compute_ucb(x, A, b, alpha)
             idx = np.argmax(UCB)
             _, r = bandit.pull_arm(idx, x)
@@ -77,12 +76,12 @@ def linucb(bandit, alpha, trials, history = None):
             regret[t] = bandit.compute_regret(idx, context=x)
 
     elif history == "artificial replay":
-        context_data, arms_data, rewards_data = bandit.get_data()
+        context_data, arms_data, rewards_data = bandit.get_offline_data()
         historical_pulls = np.bincount(arms_data, minlength=K)
         artificial_pulls = np.zeros(K, dtype=int)
 
         t = 0
-        x = bandit.sample_context(bandit.online_distribution)
+        x = bandit.get_online_sample()
 
         while t < trials:
             UCB = compute_ucb(x, A, b, alpha)
@@ -102,11 +101,11 @@ def linucb(bandit, alpha, trials, history = None):
                 b[idx] += r * x
                 regret[t] = bandit.compute_regret(idx, context=x)
                 t += 1
-                x = bandit.sample_context(bandit.online_distribution)
+                x = bandit.get_online_sample()
 
     else: # no history - standard online LinUCB
         for t in range(trials):
-            x = bandit.sample_context(bandit.online_distribution)
+            x = bandit.get_online_sample()
             UCB = compute_ucb(x, A, b, alpha)
             idx = np.argmax(UCB)
             _, r = bandit.pull_arm(idx, x)
@@ -141,7 +140,7 @@ def linucb_matching_context(bandit, alpha, trials):
     b = [np.zeros(D + 1) for k in range(K)]
     regret = np.zeros(trials)
 
-    context_data, arms_data, rewards_data = bandit.get_data()
+    context_data, arms_data, rewards_data = bandit.get_offline_data()
 
     df = pd.DataFrame({
         'context': list(map(tuple, context_data)),
@@ -153,7 +152,7 @@ def linucb_matching_context(bandit, alpha, trials):
 
     t = 0
     artificial_pulls = np.zeros(K, dtype=int)
-    x = bandit.sample_context(bandit.online_distribution)
+    x = bandit.get_online_sample()
 
     while t < trials:
         UCB = compute_ucb(x, A, b, alpha)
@@ -174,6 +173,6 @@ def linucb_matching_context(bandit, alpha, trials):
             b[idx] += r * x
             regret[t] = bandit.compute_regret(idx, context=x)
             t += 1
-            x = bandit.sample_context(bandit.online_distribution)
+            x = bandit.get_online_sample()
 
     return regret, artificial_pulls
