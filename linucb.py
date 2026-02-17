@@ -79,6 +79,7 @@ def linucb(bandit, alpha, trials, history = None):
         context_data, arms_data, rewards_data = bandit.get_offline_data()
         historical_pulls = np.bincount(arms_data, minlength=K)
         artificial_pulls = np.zeros(K, dtype=int)
+        data_usage = np.zeros(trials)
 
         t = 0
         x = bandit.get_online_sample()
@@ -100,8 +101,11 @@ def linucb(bandit, alpha, trials, history = None):
                 A[idx] += np.outer(x, x)
                 b[idx] += r * x
                 regret[t] = bandit.compute_regret(idx, context=x)
+                data_usage[t] = np.sum(historical_pulls - artificial_pulls)
                 t += 1
                 x = bandit.get_online_sample()
+
+        return regret, artificial_pulls, data_usage
 
     else: # no history - standard online LinUCB
         for t in range(trials):
@@ -114,7 +118,7 @@ def linucb(bandit, alpha, trials, history = None):
             b[idx] += r * x
             regret[t] = bandit.compute_regret(idx, context=x)
     
-    return regret, artificial_pulls if history == "artificial replay" else None
+    return regret
 
 def linucb_matching_context(bandit, alpha, trials):
     """
@@ -152,6 +156,8 @@ def linucb_matching_context(bandit, alpha, trials):
 
     t = 0
     artificial_pulls = np.zeros(K, dtype=int)
+    data_left = len(df)
+    data_usage = np.zeros(trials)
     x = bandit.get_online_sample()
 
     while t < trials:
@@ -166,13 +172,15 @@ def linucb_matching_context(bandit, alpha, trials):
             b[idx] += r * x
             df = df.drop(matches.index[0])  # Remove the used data point
             artificial_pulls[idx] += 1
+            data_left -= 1
             continue
         else:
             _, r = bandit.pull_arm(idx, x)
             A[idx] += np.outer(x, x)
             b[idx] += r * x
             regret[t] = bandit.compute_regret(idx, context=x)
+            data_usage[t] = data_left
             t += 1
             x = bandit.get_online_sample()
 
-    return regret, artificial_pulls
+    return regret, artificial_pulls, data_usage

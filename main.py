@@ -97,8 +97,8 @@ def create_bandit(reward_fn_id, d=5, K=3, context_radius=1.0, random_seed=None, 
     elif reward_fn_id == 4:
         # Reward function 4: r = 10(x^T a)
         # Sample arm parameters uniformly from unit ball
-        # arm_params = np.array([_sample_uniform_ball(d+1) for _ in range(K)])
-        arm_params = np.random.random((K, d+1))
+        arm_params = np.array([_sample_uniform_ball(d+1) for _ in range(K)])
+        # arm_params = np.random.random((K, d+1))
         
         def reward_function_4(context, arm):
             a = arm_params[arm]
@@ -195,7 +195,7 @@ if __name__ == "__main__":
         4: r"$r = 10(x^T a)$",
     }
 
-    alpha = 7.0
+    alpha = 6.0
     trials = 5000
     
     random_seed = 42
@@ -284,21 +284,23 @@ if __name__ == "__main__":
             )
             plt.close(fig)
 
-        regret_artificial_replay, artificial_pulls = linucb(
+        regret_artificial_replay, artificial_pulls, data_usage = linucb(
             bandit_with_data, alpha, trials, history="artificial replay"
         )
         cum_regret_artificial = np.cumsum(regret_artificial_replay)
+        data_usage = data_usage / N
 
         bandit_with_data.reset_online_history()  # Clear history
 
-        regret_artificial_replay_match_context, artificial_pulls_match_context = linucb_matching_context(
+        regret_artificial_replay_match_context, artificial_pulls_match_context, data_usage_match_context = linucb_matching_context(
             bandit_with_data, alpha, trials
         )
+        data_usage_match_context = data_usage_match_context / N
         cum_regret_artificial_match_context = np.cumsum(regret_artificial_replay_match_context)
 
         bandit_with_data.reset_online_history()  # Clear history
 
-        regret_full_start, _ = linucb(
+        regret_full_start = linucb(
             bandit_with_data, alpha, trials, history="full start"
         )
         cum_regret_full_start = np.cumsum(regret_full_start)
@@ -382,45 +384,79 @@ if __name__ == "__main__":
         axes[1].set_xlabel("Timestep", fontsize=12)
         axes[1].set_ylabel("Cumulative Regret", fontsize=12)
         axes[1].set_title("Cumulative Regret", fontsize=13)
-        axes[1].legend(fontsize=11)
+        axes[1].legend(loc="upper right", fontsize=10)
         axes[1].grid(True, alpha=0.3)
 
-        axes[2].bar(
-            np.arange(K) - 0.1,
-            artificial_pulls,
-            width=0.1,
+        axes[2].plot(
+            data_usage,
+            # label="Artificial Replay Data Usage",
+            linewidth=2,
+            # linestyle="-",
+            # marker="x",
+            # color="orange",
+            markersize=3,
+            markevery=max(1, len(data_usage) // 50),
             alpha=0.85,
-            label="Artificial Replay",
         )
-        axes[2].bar(
-            np.arange(K),
-            artificial_pulls_match_context,
-            width=0.1,
+        axes[2].plot(
+            data_usage_match_context,
+            # label="Artificial Replay Match Context Data Usage",
+            linewidth=2,
+            # linestyle="-",
+            # marker="o",
+            # color="blue",
+            markersize=3,
+            markevery=max(1, len(data_usage_match_context) // 50),
             alpha=0.85,
-            label="Artificial Replay Match Context",
         )
-        axes[2].bar(
-            np.arange(K) + 0.1,
-            np.bincount(arms, minlength=K),
-            width=0.1,
-            alpha=0.85,
-            label="Offline Data",
+        axes[2].set_ylabel("Percent Data Used", fontsize=12)
+        axes[2].fill_between(
+            np.arange(trials),
+            data_usage,
+            alpha=0.2,
+            step="post",
+            # color="orange",
+            label="Artificial Replay Data Usage"
         )
-        
+        axes[2].fill_between(
+            np.arange(trials),
+            data_usage_match_context,
+            alpha=0.2,
+            step="post",
+            # color="blue",
+            label="Artificial Replay Match Context Data Usage"
+        )
+        axes[2].legend(loc="upper left", fontsize=10)
+        axes[2].set_title("Data Usage Over Time", fontsize=13)
+        axes[2].grid(True, alpha=0.3)
+        axes[2].set_ylim(0, 1.00)
+        axes[2].set_yticks(np.linspace(0, 1.0, 6))
 
-        # for i, arm_param in enumerate(arm_params):
-        #     if rew_fn_id == 4:
-        #         axes[2].text(
-        #             i,
-        #             max(artificial_pulls[i], artificial_pulls_match_context[i], np.bincount(arms, minlength=K)[i]) + 0.5,
-        #             f"{arm_param[1]:.2f}, {arm_param[2]:.2f}",
-        #             ha="center",
-        #             fontsize=9,
-        #         )
-        axes[2].set_xlabel("Arm", fontsize=12)
-        axes[2].set_ylabel("Number of Pulls in Artificial Replay", fontsize=12)
-        axes[2].legend(fontsize=11)
-        axes[2].set_title("Arm Pull Distribution in Artificial Replay", fontsize=13)
+        # axes[3].bar(
+        #     np.arange(K) - 0.1,
+        #     artificial_pulls,
+        #     width=0.1,
+        #     alpha=0.85,
+        #     label="Artificial Replay",
+        # )
+        # axes[3].bar(
+        #     np.arange(K),
+        #     artificial_pulls_match_context,
+        #     width=0.1,
+        #     alpha=0.85,
+        #     label="Artificial Replay Match Context",
+        # )
+        # axes[3].bar(
+        #     np.arange(K) + 0.1,
+        #     np.bincount(arms, minlength=K),
+        #     width=0.1,
+        #     alpha=0.85,
+        #     label="Offline Data",
+        # )
+        # axes[3].set_xlabel("Arm", fontsize=12)
+        # axes[3].set_ylabel("Number of Pulls in Artificial Replay", fontsize=12)
+        # axes[3].legend(fontsize=11)
+        # axes[3].set_title("Arm Pull Distribution in Artificial Replay", fontsize=13)
 
         plt.tight_layout()
 
